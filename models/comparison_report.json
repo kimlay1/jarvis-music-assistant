@@ -1,0 +1,26 @@
+{
+  "test_samples": 731,
+  "device": "cuda",
+  "models": {
+    "logreg": {
+      "model": "TF-IDF + LogisticRegression",
+      "accuracy": 0.9891,
+      "macro_f1": 0.974,
+      "weighted_f1": 0.9891,
+      "avg_latency_ms": 0.211,
+      "PlayMusic_as_OutOfScope": 1,
+      "OutOfScope_as_PlayMusic": 3,
+      "total_PlayMusic_OutOfScope_confusions": 4
+    },
+    "distilbert": {
+      "model": "Fine-Tuned DistilBERT",
+      "accuracy": 0.9918,
+      "macro_f1": 0.9845,
+      "weighted_f1": 0.9918,
+      "avg_latency_ms": 3.333,
+      "PlayMusic_as_OutOfScope": 1,
+      "OutOfScope_as_PlayMusic": 1,
+      "total_PlayMusic_OutOfScope_confusions": 2
+    }
+  }
+}

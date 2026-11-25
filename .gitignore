@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Large trained model weights (exceed GitHub 100 MB limit; retrain via notebooks/train_models.ipynb)
+models/distilbert_intent/
+models/*.joblib
+
+# Keep benchmark report
+!models/comparison_report.json
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
