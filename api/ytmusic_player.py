@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import time
 import webbrowser
 from typing import Any, Optional
 
-import pyautogui
 from ytmusicapi import YTMusic
 
 _ytmusic: Optional[YTMusic] = None
@@ -66,7 +66,17 @@ def default_player_state() -> dict[str, Any]:
         "volume": 80,
         "is_muted": False,
         "playlist": [],
+        # Bumped whenever a track is (re)started so the embedded player knows to
+        # begin at 0:00 instead of resuming the saved position.
+        "play_token": 0,
     }
+
+
+def _start_new_track(state: dict[str, Any]) -> None:
+    state["is_playing"] = True
+    # Timestamp rather than a counter: a counter restarts at 1 in every new browser
+    # session and would resume a position saved by an older session.
+    state["play_token"] = time.time_ns()
 
 
 def apply_intent_to_player_state(
@@ -81,7 +91,7 @@ def apply_intent_to_player_state(
             return f"No YouTube Music results found for '{query}'."
         state["queue"] = tracks
         state["current_index"] = 0
-        state["is_playing"] = True
+        _start_new_track(state)
         return f"Playing in app: {tracks[0]['display']}"
 
     if intent == "AddToPlaylist":
@@ -112,7 +122,7 @@ def apply_intent_to_player_state(
         if not state["queue"]:
             return "Queue is empty. Play a song first."
         state["current_index"] = (state["current_index"] + 1) % len(state["queue"])
-        state["is_playing"] = True
+        _start_new_track(state)
         current = state["queue"][state["current_index"]]
         return f"Skipped to next track: {current['display']}"
 
@@ -120,7 +130,7 @@ def apply_intent_to_player_state(
         if not state["queue"]:
             return "Queue is empty. Play a song first."
         state["current_index"] = (state["current_index"] - 1) % len(state["queue"])
-        state["is_playing"] = True
+        _start_new_track(state)
         current = state["queue"][state["current_index"]]
         return f"Returned to previous track: {current['display']}"
 
@@ -148,6 +158,10 @@ def apply_intent_to_player_state(
 
 def execute_intent(intent: str, query: str = "") -> str:
     """Standalone/CLI intent executor using browser + OS media keys."""
+    # Imported lazily: the Streamlit app never sends OS media keys, and pyautogui
+    # fails to import on headless machines or without its platform extras.
+    import pyautogui
+
     if intent == "PlayMusic":
         item = _search_top_track(query)
         if not item:

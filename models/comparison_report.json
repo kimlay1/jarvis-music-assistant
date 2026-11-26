@@ -1,26 +1,26 @@
 {
   "test_samples": 731,
-  "device": "cuda",
+  "device": "cpu",
   "models": {
     "logreg": {
       "model": "TF-IDF + LogisticRegression",
       "accuracy": 0.9891,
-      "macro_f1": 0.974,
-      "weighted_f1": 0.9891,
-      "avg_latency_ms": 0.211,
+      "macro_f1": 0.9639,
+      "weighted_f1": 0.9889,
+      "avg_latency_ms": 0.186,
       "PlayMusic_as_OutOfScope": 1,
       "OutOfScope_as_PlayMusic": 3,
       "total_PlayMusic_OutOfScope_confusions": 4
     },
     "distilbert": {
       "model": "Fine-Tuned DistilBERT",
-      "accuracy": 0.9918,
-      "macro_f1": 0.9845,
-      "weighted_f1": 0.9918,
-      "avg_latency_ms": 3.333,
+      "accuracy": 0.9932,
+      "macro_f1": 0.9584,
+      "weighted_f1": 0.9932,
+      "avg_latency_ms": 14.719,
       "PlayMusic_as_OutOfScope": 1,
-      "OutOfScope_as_PlayMusic": 1,
-      "total_PlayMusic_OutOfScope_confusions": 2
+      "OutOfScope_as_PlayMusic": 0,
+      "total_PlayMusic_OutOfScope_confusions": 1
     }
   }
 }

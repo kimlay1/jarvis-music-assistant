@@ -18,10 +18,11 @@ from nlp.predictor import IntentEngine, extract_music_query
 from wakeword.listener import wait_for_wakeword_and_record
 
 REPORT_PATH = "models/comparison_report.json"
+WAKEWORD_TIMEOUT_S = 15.0
 
 st.set_page_config(
     page_title="Hey Jarvis — Voice Music Assistant",
-    page_icon="🎵",
+    page_icon=":material/music_note:",
     layout="wide",
 )
 
@@ -51,7 +52,7 @@ def _init_session_state() -> None:
 
 def _render_in_app_player(state: dict[str, Any]) -> None:
     """Render the embedded YouTube IFrame Player synced to session state."""
-    st.subheader("🎧 In-App YouTube Player")
+    st.subheader("Player")
     queue = state["queue"]
     if not queue:
         st.info("No track loaded yet. Say or type a command like **'play blinding lights'**.")
@@ -59,24 +60,27 @@ def _render_in_app_player(state: dict[str, Any]) -> None:
 
     idx = state["current_index"] % len(queue)
     current = queue[idx]
-    status_badge = "▶️ Playing" if state["is_playing"] else "⏸️ Paused"
-    vol_badge = "🔇 Muted" if state["is_muted"] else f"🔊 {state['volume']}%"
+    status_badge = "Playing" if state["is_playing"] else "Paused"
+    vol_badge = "Muted" if state["is_muted"] else f"Volume {state['volume']}%"
 
     info_col, ctrl_col = st.columns([3, 2])
     with info_col:
-        st.markdown(f"**{status_badge}:** {current['display']}  |  {vol_badge}")
+        st.markdown(f"**{status_badge}:** {current['display']}  \n{vol_badge}")
     with ctrl_col:
         b1, b2, b3 = st.columns(3)
-        if b1.button("⏮️ Prev", use_container_width=True):
+        if b1.button("Prev", icon=":material/skip_previous:", use_container_width=True):
             apply_intent_to_player_state("PreviousTrack", "", state)
             st.rerun()
-        toggle_label = "⏸️ Pause" if state["is_playing"] else "▶️ Resume"
-        if b2.button(toggle_label, use_container_width=True):
+        if state["is_playing"]:
+            toggle_label, toggle_icon = "Pause", ":material/pause:"
+        else:
+            toggle_label, toggle_icon = "Resume", ":material/play_arrow:"
+        if b2.button(toggle_label, icon=toggle_icon, use_container_width=True):
             apply_intent_to_player_state(
                 "PauseMusic" if state["is_playing"] else "ResumeMusic", "", state
             )
             st.rerun()
-        if b3.button("⏭️ Next", use_container_width=True):
+        if b3.button("Next", icon=":material/skip_next:", use_container_width=True):
             apply_intent_to_player_state("NextTrack", "", state)
             st.rerun()
 
@@ -84,16 +88,33 @@ def _render_in_app_player(state: dict[str, Any]) -> None:
     is_playing_js = "true" if state["is_playing"] else "false"
     is_muted_js = "true" if state["is_muted"] else "false"
     volume_js = int(state["volume"])
+    # Same video + same token = same "listen"; pause/resume/volume reruns resume there.
+    position_key = f"{video_id}:{int(state.get('play_token', 0))}"
 
-    # Embed YouTube IFrame API so Play/Pause/Volume/Next/Prev stay inside the app
+    # Embed YouTube IFrame API so Play/Pause/Volume/Next/Prev stay inside the app.
+    # Streamlit rebuilds this iframe whenever player state changes, so the playback
+    # position is saved to localStorage and restored on reload.
     html = f"""
     <div id="yt-player-container" style="border-radius:10px;overflow:hidden;">
       <div id="yt-player"></div>
     </div>
-    <script src="https://www.youtube.com/iframe_api"></script>
     <script>
       var player;
-      function onYouTubeIframeAPIReady() {{
+      var POS_STORE = 'jarvis_player_position';
+      var POS_KEY = '{position_key}';
+      function loadPosition() {{
+        try {{
+          var saved = JSON.parse(window.localStorage.getItem(POS_STORE) || 'null');
+          return (saved && saved.key === POS_KEY) ? Math.floor(saved.t) : 0;
+        }} catch (e) {{ return 0; }}
+      }}
+      function savePosition(t) {{
+        try {{
+          window.localStorage.setItem(POS_STORE, JSON.stringify({{key: POS_KEY, t: t}}));
+        }} catch (e) {{}}
+      }}
+      function createPlayer() {{
+        if (player) {{ return; }}
         player = new YT.Player('yt-player', {{
           height: '220',
           width: '100%',
@@ -101,10 +122,30 @@ def _render_in_app_player(state: dict[str, Any]) -> None:
           playerVars: {{
             autoplay: {1 if state["is_playing"] else 0},
             controls: 1,
-            rel: 0
+            rel: 0,
+            start: loadPosition()
           }},
           events: {{
+            'onStateChange': function(event) {{
+              if (event.data === YT.PlayerState.ENDED) {{
+                savePosition(0);
+                return;
+              }}
+              // A freshly reloaded player reports 0:00 before it seeks; never
+              // let that overwrite the real saved position.
+              var t = player.getCurrentTime ? player.getCurrentTime() : 0;
+              if (t > 0 && (event.data === YT.PlayerState.PLAYING ||
+                            event.data === YT.PlayerState.PAUSED)) {{
+                savePosition(t);
+              }}
+            }},
             'onReady': function(event) {{
+              setInterval(function() {{
+                if (player.getPlayerState && player.getPlayerState() === YT.PlayerState.PLAYING &&
+                    player.getCurrentTime() > 0) {{
+                  savePosition(player.getCurrentTime());
+                }}
+              }}, 1000);
               event.target.setVolume({volume_js});
               if ({is_muted_js}) {{
                 event.target.mute();
@@ -120,14 +161,26 @@ def _render_in_app_player(state: dict[str, Any]) -> None:
           }}
         }});
       }}
+      // Define the ready hook BEFORE loading the API. On reloads the API script can
+      // come from cache and fire before a later-defined hook exists, leaving the
+      // player blank, so also poll briefly in case the hook was missed.
+      window.onYouTubeIframeAPIReady = createPlayer;
+      var apiPolls = 0;
+      var apiPoll = setInterval(function() {{
+        if (player || ++apiPolls > 50) {{ clearInterval(apiPoll); return; }}
+        if (window.YT && YT.loaded && YT.Player) {{ createPlayer(); }}
+      }}, 200);
     </script>
+    <script src="https://www.youtube.com/iframe_api"></script>
     """
     components.html(html, height=235)
 
     with st.expander(f"Up Next Queue ({len(queue)} tracks)", expanded=False):
         for i, track in enumerate(queue):
-            prefix = "▶️ " if i == idx else f"{i + 1}. "
-            st.write(f"{prefix}{track['display']}")
+            if i == idx:
+                st.markdown(f"**{i + 1}. {track['display']}** (now playing)")
+            else:
+                st.write(f"{i + 1}. {track['display']}")
 
     if state["playlist"]:
         with st.expander(f"In-App Playlist ({len(state['playlist'])} tracks)", expanded=False):
@@ -153,9 +206,15 @@ def _process_command(
         if intent in {"PlayMusic", "AddToPlaylist"}
         else transcript
     )
-    status_msg = apply_intent_to_player_state(
-        intent, query, st.session_state.player_state
-    )
+    try:
+        status_msg = apply_intent_to_player_state(
+            intent, query, st.session_state.player_state
+        )
+    except Exception as exc:  # network / YouTube Music API failures
+        status_msg = f"YouTube Music request failed ({type(exc).__name__}: {exc}). Check your internet connection and try again."
+        intent_failed = True
+    else:
+        intent_failed = False
     st.session_state.last_result = {
         "transcript": transcript,
         "preds": preds,
@@ -163,6 +222,7 @@ def _process_command(
         "intent": intent,
         "query": query,
         "status_msg": status_msg,
+        "failed": intent_failed,
     }
 
 
@@ -195,7 +255,9 @@ def _render_last_result() -> None:
     st.markdown(f"**Active Model:** `{res['active_model']}`")
     if res["intent"] in {"PlayMusic", "AddToPlaylist"}:
         st.markdown(f"**Extracted Query:** `{res['query']}`")
-    if res["intent"] == "OutOfScope":
+    if res.get("failed"):
+        st.error(res["status_msg"])
+    elif res["intent"] == "OutOfScope":
         st.info(res["status_msg"])
     else:
         st.success(res["status_msg"])
@@ -204,7 +266,7 @@ def _render_last_result() -> None:
 def main() -> None:
     _init_session_state()
 
-    st.title("🎵 Hey Jarvis — Voice-Controlled YouTube Music Assistant")
+    st.title("Hey Jarvis — Voice-Controlled YouTube Music Assistant")
     st.caption(
         "openWakeWord (`hey_jarvis`) + faster-whisper (`base.en`) + "
         "TF-IDF/LogReg vs. DistilBERT + In-App YouTube Player"
@@ -254,7 +316,7 @@ def main() -> None:
 
     engine = load_intent_engine()
 
-    voice_tab, sandbox_tab = st.tabs(["🎙️ Voice Trigger Mode", "⌨️ Text Sandbox Mode"])
+    voice_tab, sandbox_tab = st.tabs(["Voice Mode", "Text Mode"])
 
     with voice_tab:
         st.write(
@@ -268,12 +330,20 @@ def main() -> None:
                         record_seconds=record_seconds,
                         threshold=wakeword_threshold,
                         status_callback=lambda msg: status.update(label=msg),
+                        timeout=WAKEWORD_TIMEOUT_S,
                     )
                     status.update(label="Transcribing command with faster-whisper...")
                     transcript = transcriber.transcribe(
                         audio_float32, beam_size=3, vad_filter=True
                     )
                     status.update(label="Transcription complete!", state="complete")
+                except TimeoutError:
+                    status.update(
+                        label=f"Didn't hear 'Hey Jarvis' within {WAKEWORD_TIMEOUT_S:.0f}s. "
+                        "Press the button to try again.",
+                        state="error",
+                    )
+                    st.stop()
                 except Exception as exc:
                     status.update(label=f"Audio capture failed: {exc}", state="error")
                     st.stop()

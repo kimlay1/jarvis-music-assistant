@@ -59,12 +59,22 @@ class WakeWordListener:
         self.sample_rate = sample_rate
         self.chunk_samples = chunk_samples
 
-        self.model = Model(
+        model_kwargs = dict(
             wakeword_models=[model_name],
             inference_framework=inference_framework,
             vad_threshold=vad_threshold,
             enable_speex_noise_suppression=enable_speex_noise_suppression,
         )
+        try:
+            self.model = Model(**model_kwargs)
+        except Exception:
+            # openWakeWord >= 0.6 ships without pretrained weights (onnxruntime raises
+            # its own NoSuchFile error type). Download them once, then retry; a
+            # second failure propagates with the real error.
+            from openwakeword.utils import download_models
+
+            download_models(model_names=[model_name])
+            self.model = Model(**model_kwargs)
 
         self._pa: Optional[pyaudio.PyAudio] = None
         self._stream: Optional[pyaudio.Stream] = None
